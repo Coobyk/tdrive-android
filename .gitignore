@@ -1,0 +1,14 @@
+# Build output
+**/build/
+.gradle/
+local.properties
+
+# The native libraries the Gradle build drops in
+app/app/src/main/jniLibs/
+
+# The engine's own build output
+engine/target/
+
+# Signing
+*.jks
+*.keystore

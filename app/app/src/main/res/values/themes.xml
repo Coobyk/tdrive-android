@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window before the first frame is drawn: the app's own canvas,
+         so there is no white flash on a dark theme. -->
+    <style name="Theme.TDrive" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
+</resources>
