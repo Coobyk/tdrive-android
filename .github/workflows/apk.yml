@@ -58,8 +58,15 @@ jobs:
         working-directory: engine
         run: cargo test
 
+      - name: The JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+          cache-dependency-path: app/gradle/wrapper/gradle-wrapper.properties
+
       - name: The application
-        uses: gradle/actions/setup-gradle@v4
         env:
           # The engine's build wants the NDK's own place, which is where the
           # step above puts it.
