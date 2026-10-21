@@ -118,15 +118,19 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun work(
         message: String? = null,
+        next: ((TDriveState) -> Unit)? = null,
         block: suspend () -> Pair<TDriveState?, String?>?,
     ) {
         update { it.copy(working = true, message = message, error = null) }
         viewModelScope.launch {
             val (state, error) = withContext(Dispatchers.IO) { block() } ?: return@launch
+            var carried = _state.value
             update { current ->
                 val base = state ?: current
-                base.copy(working = false, message = null, error = error)
+                carried = base.copy(working = false, message = null, error = error)
+                carried
             }
+            if (error == null) next?.invoke(carried)
         }
     }
 
@@ -155,7 +159,13 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
     /** Ask for the code to be sent. */
     fun signIn() {
         val current = _state.value
-        work("Signing in...") {
+        work(
+            message = "Signing in...",
+            next = { state ->
+                // The account is in: the drive is next.
+                if (!state.codeSent) openTheSavedDrive()
+            },
+        ) {
             val answer = NativeBridge.nativeSignIn(
                 current.apiId.toIntOrNull() ?: 0,
                 current.apiHash,
@@ -166,7 +176,7 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
                 Answer.Ok -> {
                     val signedIn = NativeBridge.nativeSessionState() == "ready"
                     _state.value.copy(
-                        screen = if (signedIn) Screen.Drive else Screen.SignIn,
+                        screen = Screen.SignIn,
                         codeSent = !signedIn,
                     ) to null
                 }
@@ -177,13 +187,24 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
     /** Check the code. */
     fun verifyCode() {
         val code = _state.value.code
-        work("Checking the code...") {
+        work(
+            message = "Checking the code...",
+            next = { state ->
+                // A password is asked for when the account has one of its own.
+                if (!state.needsPassword) openTheSavedDrive()
+            },
+        ) {
             val raw = NativeBridge.nativeVerifyCode(code)
             val json = jsonOf(raw)
             when (val result = answerOf(raw)) {
                 is Answer.Failed -> null to result.message
                 Answer.Ok -> {
-                    _state.value.copy(needsPassword = json?.optBoolean("needsPassword") == true) to null
+                    if (json?.optBoolean("needsPassword") == true) {
+                        _state.value.copy(needsPassword = true) to null
+                    } else {
+                        // The account is in: the drive is next.
+                        null to null
+                    }
                 }
             }
         }
@@ -192,14 +213,14 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
     /** Check the password. */
     fun verifyPassword() {
         val password = _state.value.password
-        work("Checking the password...") {
+        work(
+            message = "Checking the password...",
+            next = { openTheSavedDrive() },
+        ) {
             when (val result = answerOf(NativeBridge.nativeVerifyPassword(password))) {
                 is Answer.Failed -> null to result.message
                 Answer.Ok -> {
-                    _state.value.copy(
-                        screen = Screen.DrivePicker,
-                        needsPassword = false,
-                    ) to null
+                    _state.value.copy(needsPassword = false) to null
                 }
             }
         }
@@ -207,15 +228,24 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- The drive ----------------------------------------------------------
 
-    /** Open the drive this device remembers, if it has one. */
+    /**
+     * Open the drive this device remembers, and offer the others when it
+     * remembers none.
+     *
+     * The drive is the one the drive list says is the account's own, so the
+     * reader is not asked to pick the same one on every launch.
+     */
     private fun openTheSavedDrive() {
         work("Opening the drive...") {
+            val saved = jsonOf(NativeBridge.nativeSavedDrive())
+            val savedId = saved?.optLong("id") ?: 0
             val drives = drivesOf(NativeBridge.nativeListDrives())
-            val saved = drives.firstOrNull()
-            if (saved == null) {
+            val candidate = drives.firstOrNull { it.id == savedId }
+            if (candidate == null) {
+                // Nothing remembered, or the drive is gone: the reader picks.
                 _state.value.copy(screen = Screen.DrivePicker, drives = drives) to null
             } else {
-                val answer = NativeBridge.nativeOpenDrive(saved.id, saved.accessHash)
+                val answer = NativeBridge.nativeOpenDrive(candidate.id, candidate.accessHash)
                 when (val result = answerOf(answer)) {
                     is Answer.Failed -> _state.value.copy(drives = drives) to result.message
                     Answer.Ok -> {

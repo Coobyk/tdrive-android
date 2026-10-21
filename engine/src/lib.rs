@@ -213,9 +213,26 @@ pub mod bridge {
     }
 
     /// Open a drive and read it.
+    ///
+    /// The access hash may be left out: the engine knows the account's own
+    /// channels, and looks the hash up there.
     pub fn open_drive(channel_id: i64, access_hash: i64) -> Value {
         with_engine(|engine| super::open_drive(engine, channel_id, access_hash))
             .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// The drive this device remembers, when it remembers one.
+    pub fn saved_drive() -> Value {
+        let config = tdrive_rs::config::DriveConfig::load().unwrap_or_default();
+        match config.personal() {
+            Some(drive) => json!({
+                "ok": true,
+                "id": drive.id,
+                "accessHash": drive.access_hash,
+                "title": drive.title,
+            }),
+            None => json!({ "ok": true, "id": 0 }),
+        }
     }
 
     /// The drive that is open.
@@ -481,6 +498,21 @@ fn open_drive(engine: &mut Engine, channel_id: i64, access_hash: i64) -> Value {
     let Some(client) = engine.client.as_ref() else {
         return failure("not signed in");
     };
+    // The account's own channels carry the access hash and the title, so the
+    // application does not have to keep either.
+    let channels = tele::list_owned_channels(client).unwrap_or_default();
+    let known = channels.iter().find(|channel| channel.id == channel_id);
+    let access_hash = if access_hash != 0 {
+        access_hash
+    } else {
+        known.map(|channel| channel.access_hash).unwrap_or_default()
+    };
+    if access_hash == 0 {
+        return failure("this drive is not one of the account's own channels");
+    }
+    let title = known
+        .map(|channel| channel.title.clone())
+        .unwrap_or_else(|| "TDrive".to_string());
     let peer_ref = tele::peer_ref(channel_id, access_hash);
     // The snapshot is a cache, never the authority: it is only used to read
     // less of the drive's history, and the drive itself is what is read.
@@ -497,7 +529,6 @@ fn open_drive(engine: &mut Engine, channel_id: i64, access_hash: i64) -> Value {
         newest_message_id: newest,
         state,
     });
-    let title = "TDrive".to_string();
     apply_contents(&mut engine.state, &title, contents);
     engine.drive = Some(OpenDrive {
         id: channel_id,
@@ -551,6 +582,16 @@ fn drive_json(engine: &Engine) -> Value {
         "hint": state.vault.as_ref().map(|vault| vault.hint.clone()).unwrap_or_default(),
         "trash": state.trash.len(),
     })
+}
+
+/// The drive this device remembers, when it remembers one.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tdrive_app_NativeBridge_nativeSavedDrive<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    let result = guarded(|| bridge::saved_drive());
+    json_string(&mut env, &result)
 }
 
 /// The drive that is open.

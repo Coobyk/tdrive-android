@@ -76,6 +76,9 @@ object NativeBridge {
     /** Open a drive and read it. */
     external fun nativeOpenDrive(channelId: Long, accessHash: Long): String
 
+    /** The drive this device remembers, when it remembers one. */
+    external fun nativeSavedDrive(): String
+
     /** The drive that is open. */
     external fun nativeDriveState(): String
 

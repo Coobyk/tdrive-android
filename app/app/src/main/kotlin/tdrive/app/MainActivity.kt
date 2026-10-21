@@ -138,6 +138,12 @@ fun DriveScreen(state: TDriveState, model: TDriveViewModel) {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                        } else if (tab == Tab.Files && state.drive != null) {
+                            Text(
+                                text = "${state.drive.items} items",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 },
