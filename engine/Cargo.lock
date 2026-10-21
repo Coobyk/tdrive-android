@@ -1700,7 +1700,7 @@ dependencies = [
 [[package]]
 name = "tdrive-rs"
 version = "0.1.0"
-source = "git+https://github.com/Coobyk/tdrive-rs.git#51d9e613e63376a39f7034877682d6a3495d1b64"
+source = "git+https://github.com/Coobyk/tdrive-rs.git#a76e1bf1bd51509994eff8d34c385f0878a0e01f"
 dependencies = [
  "anyhow",
  "argon2",
