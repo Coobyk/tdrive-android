@@ -17,6 +17,15 @@ tdrive-rs = { git = "https://github.com/Coobyk/tdrive-rs.git", default-features 
 jni = "0.21"
 serde_json = "1"
 log = "0.4"
+# The engine's own types are named here, so the crates they live in are named
+# here too.
+grammers-client = "0.10"
+grammers-session = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+# The Telegram client's two-factor helper uses the safe-prime checker, whose
+# signature changed in the released 2.0; the release candidate is the one it
+# was written against, and the desktop application resolves to it as well.
+glass_pumpkin = "=2.0.0-rc0"
 
 [profile.release]
 # The phone's libraries are small; the engine is the whole app's weight.

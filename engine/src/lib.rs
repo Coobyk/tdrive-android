@@ -11,10 +11,11 @@
 //! know how to read.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use jni::objects::{JClass, JString};
 use jni::sys::{jboolean, jint, jstring};
-use jni::{JNIEnv, JavaStr};
+use jni::JNIEnv;
 use serde_json::{Value, json};
 use tdrive_rs::config::{DriveConfig, StoredDrive};
 use tdrive_rs::crypto;
@@ -70,17 +71,17 @@ struct OpenDrive {
     peer_ref: PeerRef,
 }
 
-/// The engine, if it is there.
-static mut ENGINE: Option<Box<Engine>> = None;
-
-/// The engine. There is exactly one, and the application never asks twice.
-fn engine() -> Result<&'static mut Engine, String> {
-    unsafe {
-        if ENGINE.is_none() {
-            ENGINE = Some(Box::new(Engine::new()));
-        }
-        Ok(ENGINE.as_mut().unwrap())
+/// The engine, for as long as the call needs it.
+///
+/// There is exactly one engine, and the phone's calls are short, so it lives
+/// behind a lock rather than in a place that could be reached twice.
+fn with_engine<T>(block: impl FnOnce(&mut Engine) -> T) -> Option<T> {
+    static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
+    let mut guard = ENGINE.lock().ok()?;
+    if guard.is_none() {
+        *guard = Some(Engine::new());
     }
+    guard.as_mut().map(block)
 }
 
 /// A string for the phone.
@@ -98,7 +99,7 @@ fn json_string(env: &mut JNIEnv, value: &Value) -> jstring {
 
 /// A string from the phone.
 fn read_string(env: &mut JNIEnv, value: &JString) -> Result<String, String> {
-    let value: JavaStr = env
+    let value = env
         .get_string(value)
         .map_err(|_| "the string could not be read".to_string())?;
     Ok(value.into())
@@ -117,39 +118,34 @@ fn success() -> Value {
 // --- The session ------------------------------------------------------------
 
 /// Set the engine up.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeInit<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = match engine() {
-        Ok(_) => success(),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|_| success()).unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
 /// Whether the account is signed in.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeSessionState<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let state = match engine() {
-        Ok(engine) => {
-            if engine.client.is_some() {
-                "ready"
-            } else {
-                "none"
-            }
+    let state = with_engine(|engine| {
+        if engine.client.is_some() {
+            "ready"
+        } else {
+            "none"
         }
-        Err(_) => "none",
-    };
+    })
+    .unwrap_or("none");
     string(&mut env, state)
 }
 
 /// Sign in: the code is sent to the account's Telegram.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeSignIn<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -165,10 +161,8 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeSignIn<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = match engine() {
-        Ok(engine) => sign_in(engine, api_id as i32, &api_hash, &phone),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| sign_in(engine, api_id as i32, &api_hash, &phone))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -198,7 +192,7 @@ fn sign_in(engine: &mut Engine, api_id: i32, api_hash: &str, phone: &str) -> Val
 }
 
 /// Check the code the account was sent.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeVerifyCode<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -208,10 +202,8 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeVerifyCode<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = match engine() {
-        Ok(engine) => verify_code(engine, &code),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| verify_code(engine, &code))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -235,7 +227,7 @@ fn verify_code(engine: &mut Engine, code: &str) -> Value {
 }
 
 /// Check the password the account has.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeVerifyPassword<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -245,10 +237,8 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeVerifyPassword<'local>
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = match engine() {
-        Ok(engine) => verify_password(engine, &password),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| verify_password(engine, &password))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -267,45 +257,41 @@ fn verify_password(engine: &mut Engine, password: &str) -> Value {
 }
 
 /// Forget the account.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeSignOut<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = match engine() {
-        Ok(engine) => {
-            engine.client = None;
-            engine.drive = None;
-            success()
-        }
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| {
+        engine.client = None;
+        engine.drive = None;
+        success()
+    })
+    .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
 // --- The drive --------------------------------------------------------------
 
 /// The channels this account may use as a drive.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeListDrives<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = match engine() {
-        Ok(engine) => {
-            let Some(client) = engine.client.as_ref() else {
-                return json_string(&mut env, &failure("not signed in"));
-            };
-            match tele::list_owned_channels(client) {
-                Ok(channels) => {
-                    let list: Vec<Value> = channels.iter().map(channel_json).collect();
-                    json!({ "ok": true, "drives": list })
-                }
-                Err(message) => failure(&message),
+    let result = with_engine(|engine| {
+        let Some(client) = engine.client.as_ref() else {
+            return failure("not signed in");
+        };
+        match tele::list_owned_channels(client) {
+            Ok(channels) => {
+                let list: Vec<Value> = channels.iter().map(channel_json).collect();
+                json!({ "ok": true, "drives": list })
             }
+            Err(message) => failure(&message),
         }
-        Err(message) => failure(&message),
-    };
+    })
+    .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -321,17 +307,15 @@ fn channel_json(channel: &OwnedChannel) -> Value {
 }
 
 /// Open a drive and read it.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeOpenDrive<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     channel_id: jint,
     access_hash: jint,
 ) -> jstring {
-    let result = match engine() {
-        Ok(engine) => open_drive(engine, channel_id as i64, access_hash as i64),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| open_drive(engine, channel_id as i64, access_hash as i64))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -341,7 +325,11 @@ fn open_drive(engine: &mut Engine, channel_id: i64, access_hash: i64) -> Value {
         return failure("not signed in");
     };
     let peer_ref = tele::peer_ref(channel_id, access_hash);
-    let resume = tdrive_rs::cache::load(channel_id);
+    // The snapshot is a cache, never the authority: it is only used to read
+    // less of the drive's history, and the drive itself is what is read.
+    let resume = tdrive_rs::cache::load(channel_id).map(|snapshot| {
+        (snapshot.newest_message_id, snapshot.state)
+    });
     let (contents, state, newest) = match tele::load_drive(client, peer_ref, resume) {
         Ok(loaded) => loaded,
         Err(message) => return failure(&message),
@@ -356,7 +344,7 @@ fn open_drive(engine: &mut Engine, channel_id: i64, access_hash: i64) -> Value {
     apply_contents(&mut engine.state, &title, contents);
     engine.drive = Some(OpenDrive {
         id: channel_id,
-        title,
+        title: title.clone(),
         peer_ref,
     });
     // The choice is remembered, so the next launch opens the same drive.
@@ -364,7 +352,7 @@ fn open_drive(engine: &mut Engine, channel_id: i64, access_hash: i64) -> Value {
     config.remember_personal(StoredDrive {
         id: channel_id,
         access_hash,
-        title: engine.drive.as_ref().map(|d| d.title.clone()).unwrap_or_default(),
+        title,
         kind: "personal".to_string(),
     });
     let _ = config.save();
@@ -409,32 +397,28 @@ fn drive_json(engine: &Engine) -> Value {
 }
 
 /// The drive that is open.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDriveState<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = match engine() {
-        Ok(engine) => drive_json(engine),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| drive_json(engine))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
 /// The files of the drive, as the phone reads them.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeFilesJson<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = match engine() {
-        Ok(engine) => {
-            let files: Vec<Value> = engine.state.files.iter().map(file_json).collect();
-            let trash = trash_json(engine);
-            json!({ "ok": true, "files": files, "trash": trash })
-        }
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| {
+        let files: Vec<Value> = engine.state.files.iter().map(file_json).collect();
+        let trash = trash_json(engine);
+        json!({ "ok": true, "files": files, "trash": trash })
+    })
+    .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -495,7 +479,7 @@ fn trash_json(engine: &Engine) -> Vec<Value> {
 // --- The vault --------------------------------------------------------------
 
 /// Unlock the drive.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeUnlock<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -505,30 +489,31 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeUnlock<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = match engine() {
-        Ok(engine) => {
-            let Some(vault) = engine.state.vault.as_ref() else {
-                return json_string(&mut env, &failure("this drive is not encrypted"));
-            };
-            match crypto::unlock(&vault.material, &password) {
-                Ok(key) => {
-                    if let Some(vault) = engine.state.vault.as_mut() {
-                        vault.key = Some(key);
-                    }
-                    success()
-                }
-                Err(_) => failure("That encryption password is incorrect."),
-            }
-        }
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| unlock(engine, &password))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
+}
+
+/// Unlock the drive.
+fn unlock(engine: &mut Engine, password: &str) -> Value {
+    let Some(vault) = engine.state.vault.as_ref() else {
+        return failure("this drive is not encrypted");
+    };
+    match crypto::unlock(&vault.material, password) {
+        Ok(key) => {
+            if let Some(vault) = engine.state.vault.as_mut() {
+                vault.key = Some(key);
+            }
+            success()
+        }
+        Err(_) => failure("That encryption password is incorrect."),
+    }
 }
 
 // --- The files --------------------------------------------------------------
 
 /// Download a file to a place on the phone.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDownload<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -539,10 +524,8 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDownload<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = match engine() {
-        Ok(engine) => download(engine, message_id as i32, &dest),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| download(engine, message_id as i32, &dest))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -554,19 +537,18 @@ fn download(engine: &mut Engine, message_id: i32, dest: &str) -> Value {
     let Some(drive) = engine.drive.as_ref() else {
         return failure("no drive is open");
     };
-    let Some(file) = engine.state.files.iter().find(|file| file.message_id == message_id) else {
+    let Some(file) = engine
+        .state
+        .files
+        .iter()
+        .find(|file| file.message_id == message_id)
+    else {
         return failure("no such file");
     };
     let messages = content_messages(file);
     let key = engine.state.vault.as_ref().and_then(|vault| vault.key);
     let key = if file.encrypted { key } else { None };
-    match tele::download_file(
-        client,
-        drive.peer_ref,
-        &messages,
-        Path::new(dest),
-        key,
-    ) {
+    match tele::download_file(client, drive.peer_ref, &messages, Path::new(dest), key) {
         Ok(()) => success(),
         Err(message) => failure(&message),
     }
@@ -582,7 +564,7 @@ fn content_messages(file: &RemoteFile) -> Vec<i32> {
 }
 
 /// Upload a file from the phone.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeUpload<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -598,10 +580,8 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeUpload<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = match engine() {
-        Ok(engine) => upload(engine, &path, &parent, encrypt != 0),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| upload(engine, &path, &parent, encrypt != 0))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -633,7 +613,7 @@ fn upload(engine: &mut Engine, path: &str, parent: &str, encrypt: bool) -> Value
 }
 
 /// Move a file to the trash, and put it back.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeTrash<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -645,10 +625,8 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeTrash<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = match engine() {
-        Ok(engine) => trash(engine, &object_id, revision as i64, restore != 0),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| trash(engine, &object_id, revision as i64, restore != 0))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -662,9 +640,20 @@ fn trash(engine: &mut Engine, object_id: &str, revision: i64, restore: bool) -> 
     };
     let now = chrono::Utc::now().timestamp();
     let op = if restore {
-        ops::untrash_op(object_id, revision, now)
+        ops::Op::Untrash {
+            op_id: ops::deterministic_op_id("untrash", object_id, revision),
+            obj: object_id.to_string(),
+            parent: String::new(),
+            name: String::new(),
+            expected_revision: revision,
+        }
     } else {
-        ops::trash_op(object_id, revision, now, tdrive_rs::models::PURGE_WINDOW_DAYS * 86_400)
+        ops::trash_op(
+            object_id,
+            revision,
+            now,
+            tdrive_rs::models::PURGE_WINDOW_DAYS * 86_400,
+        )
     };
     match tele::send_op(client, drive.peer_ref, &op) {
         Ok(_) => success(),
@@ -673,7 +662,7 @@ fn trash(engine: &mut Engine, object_id: &str, revision: i64, restore: bool) -> 
 }
 
 /// Create a folder.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeMkdir<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -688,10 +677,8 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeMkdir<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = match engine() {
-        Ok(engine) => mkdir(engine, &parent, &name),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| mkdir(engine, &parent, &name))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -712,16 +699,14 @@ fn mkdir(engine: &mut Engine, parent: &str, name: &str) -> Value {
 }
 
 /// The picture published beside a file, if it has one.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDerivative<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     message_id: jint,
 ) -> jstring {
-    let result = match engine() {
-        Ok(engine) => derivative(engine, message_id as i32),
-        Err(message) => failure(&message),
-    };
+    let result = with_engine(|engine| derivative(engine, message_id as i32))
+        .unwrap_or_else(|| failure("the engine is not there"));
     json_string(&mut env, &result)
 }
 
@@ -733,7 +718,12 @@ fn derivative(engine: &mut Engine, message_id: i32) -> Value {
     let Some(drive) = engine.drive.as_ref() else {
         return failure("no drive is open");
     };
-    let Some(file) = engine.state.files.iter().find(|file| file.message_id == message_id) else {
+    let Some(file) = engine
+        .state
+        .files
+        .iter()
+        .find(|file| file.message_id == message_id)
+    else {
         return failure("no such file");
     };
     let Some(entry) = file.renditions.iter().find(|entry| entry.is_thumbnail()) else {
@@ -775,7 +765,7 @@ fn colour(value: u32) -> u64 {
 }
 
 /// The theme catalogue, as the phone reads it.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeThemes<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
@@ -786,26 +776,25 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeThemes<'local>(
             // The whole palette travels, not only the four colours the
             // original's card shows: the phone draws with the same tokens the
             // desktop shell does.
-            let palette = themes::palette_of(theme.id);
             let mut tokens = serde_json::Map::new();
-            if let Some(palette) = palette {
-                tokens.insert("canvas".into(), colour(palette.canvas));
-                tokens.insert("surface0".into(), colour(palette.surface_0));
-                tokens.insert("surface1".into(), colour(palette.surface_1));
-                tokens.insert("surface2".into(), colour(palette.surface_2));
-                tokens.insert("surface3".into(), colour(palette.surface_3));
-                tokens.insert("text".into(), colour(palette.text));
-                tokens.insert("textSoft".into(), colour(palette.text_soft));
-                tokens.insert("textMuted".into(), colour(palette.text_muted));
-                tokens.insert("textSubtle".into(), colour(palette.text_subtle));
-                tokens.insert("border".into(), colour(palette.border));
-                tokens.insert("borderSoft".into(), colour(palette.border_soft));
-                tokens.insert("accent".into(), colour(palette.accent));
-                tokens.insert("accentHover".into(), colour(palette.accent_hover));
-                tokens.insert("onAccent".into(), colour(palette.on_accent));
-                tokens.insert("danger".into(), colour(palette.danger));
-                tokens.insert("warning".into(), colour(palette.warning));
-                tokens.insert("success".into(), colour(palette.success));
+            if let Some(palette) = themes::palette_of(theme.id) {
+                tokens.insert("canvas".into(), colour(palette.canvas).into());
+                tokens.insert("surface0".into(), colour(palette.surface_0).into());
+                tokens.insert("surface1".into(), colour(palette.surface_1).into());
+                tokens.insert("surface2".into(), colour(palette.surface_2).into());
+                tokens.insert("surface3".into(), colour(palette.surface_3).into());
+                tokens.insert("text".into(), colour(palette.text).into());
+                tokens.insert("textSoft".into(), colour(palette.text_soft).into());
+                tokens.insert("textMuted".into(), colour(palette.text_muted).into());
+                tokens.insert("textSubtle".into(), colour(palette.text_subtle).into());
+                tokens.insert("border".into(), colour(palette.border).into());
+                tokens.insert("borderSoft".into(), colour(palette.border_soft).into());
+                tokens.insert("accent".into(), colour(palette.accent).into());
+                tokens.insert("accentHover".into(), colour(palette.accent_hover).into());
+                tokens.insert("onAccent".into(), colour(palette.on_accent).into());
+                tokens.insert("danger".into(), colour(palette.danger).into());
+                tokens.insert("warning".into(), colour(palette.warning).into());
+                tokens.insert("success".into(), colour(palette.success).into());
             }
             json!({
                 "id": theme.id,

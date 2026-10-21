@@ -85,15 +85,24 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
         _state.value = block(_state.value)
     }
 
-    /** Do something that takes time, off the main thread. */
+    /**
+     * Do something that takes time, off the main thread.
+     *
+     * The block answers with the state to carry on with and the error to
+     * show, if there was one; a state of `null` means the state on screen
+     * stands.
+     */
     private fun work(
         message: String? = null,
-        block: suspend () -> Pair<TDriveState, String?>?,
+        block: suspend () -> Pair<TDriveState?, String?>?,
     ) {
         update { it.copy(working = true, message = message, error = null) }
         viewModelScope.launch {
             val (state, error) = withContext(Dispatchers.IO) { block() } ?: return@launch
-            update { it.copy(working = false, message = null, error = error).let(state) }
+            update { current ->
+                val base = state ?: current
+                base.copy(working = false, message = null, error = error)
+            }
         }
     }
 

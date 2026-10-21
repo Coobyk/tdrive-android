@@ -1,5 +1,3 @@
-import com.android.build.api.tasks.Exec
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -65,12 +63,21 @@ dependencies {
 
 // --- The engine --------------------------------------------------------------
 
-/** The Rust target each phone architecture is built for. */
+/** The phone architecture, and the Rust target it is built for. */
 val engineTargets = mapOf(
     "arm64-v8a" to "aarch64-linux-android",
     "armeabi-v7a" to "armv7-linux-androideabi",
     "x86_64" to "x86_64-linux-android",
 )
+
+// The engine's crate lives beside the application, and the path is read
+// against the root of the build so it means the same thing wherever the
+// build is run from.
+val engineDir = rootProject.file(providers.gradleProperty("tdrive.engine.directory").get())
+val engineOutput = file("src/main/jniLibs")
+val ndkHome = System.getenv("ANDROID_NDK_HOME")
+    ?: System.getenv("ANDROID_NDK_ROOT")
+    ?: "${System.getenv("ANDROID_HOME") ?: "/opt/android"}/ndk/27.2.12479018"
 
 /**
  * The native library, built by cargo through cargo-ndk.
@@ -80,40 +87,27 @@ val engineTargets = mapOf(
  * it up. It is inside the application's own .so: there is no separate library
  * to load, and no web view anywhere in the application.
  */
-val buildEngine by tasks.registering {
-    group = "build"
-    description = "Builds the Rust engine for the phone's architectures."
+val buildEngine = engineTargets.map { (abi, target) ->
+    tasks.register<Exec>("buildEngine${abi.replace("-", "")}") {
+        group = "build"
+        description = "Builds the Rust engine for $abi."
 
-    val engineDir = file(providers.gradleProperty("tdrive.engine.directory").get())
-    val outputDir = file("src/main/jniLibs")
-    val ndk = System.getenv("ANDROID_NDK_HOME")
-        ?: System.getenv("ANDROID_NDK_ROOT")
-        ?: "${System.getenv("ANDROID_HOME") ?: "/opt/android"}/ndk/27.2.12479018"
+        workingDir = engineDir
+        commandLine(
+            "cargo", "ndk",
+            "-t", abi,
+            "-o", engineOutput.absolutePath,
+            "build", "--release",
+            "-p", "tdrive-engine",
+            "--target", target,
+        )
+        environment("CARGO_NDK_TARGET_TOOLCHAIN", "llvm")
+        environment("ANDROID_NDK_HOME", ndkHome)
 
-    inputs.dir(File(engineDir, "src"))
-    inputs.file(File(engineDir, "Cargo.toml"))
-    inputs.file(File(engineDir, "Cargo.lock"))
-    outputs.dir(outputDir)
-
-    doLast {
-        require(File(ndk).isDirectory) {
-            "The Android NDK is not where it was expected: $ndk"
-        }
-        engineTargets.forEach { (abi, target) ->
-            project.exec {
-                workingDir = engineDir
-                commandLine(
-                    "cargo", "ndk",
-                    "-t", ndk,
-                    "-o", outputDir.absolutePath,
-                    "build", "--release",
-                    "-p", "tdrive-engine",
-                    "--target", target,
-                )
-                environment("CARGO_NDK_TARGET_TOOLCHAIN", "llvm")
-                environment("ANDROID_NDK_HOME", ndk)
-            }
-        }
+        inputs.dir(File(engineDir, "src"))
+        inputs.file(File(engineDir, "Cargo.toml"))
+        inputs.file(File(engineDir, "Cargo.lock"))
+        outputs.dir(engineOutput)
     }
 }
 

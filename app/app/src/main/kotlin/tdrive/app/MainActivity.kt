@@ -49,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -104,11 +105,12 @@ fun DriveScreen(state: TDriveState, model: TDriveViewModel) {
     }
 
     // The file the phone hands over when the user picks something to upload.
+    val context = LocalContext.current
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) {
-            val path = copyToCache(this@MainActivity, uri)
+            val path = copyToCache(context, uri)
             if (path != null) {
                 model.upload(path, encrypt = state.drive?.encrypted == true)
             }
@@ -190,7 +192,7 @@ fun DriveScreen(state: TDriveState, model: TDriveViewModel) {
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
-                Tab.Files -> FilesTab(state, model) { sheet = it }
+                Tab.Files -> FilesTab(state, model) { file -> sheet = file.name to file }
                 Tab.Gallery -> GalleryTab(state, model)
                 Tab.Trash -> TrashTab(state, model)
                 Tab.Account -> AccountTab(state, model)
