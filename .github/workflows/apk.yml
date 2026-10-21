@@ -50,9 +50,11 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: The Android NDK
+        id: ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27c
+          link-to-sdk: true
 
       - name: The engine's own tests
         working-directory: engine
@@ -69,8 +71,8 @@ jobs:
       - name: The application
         env:
           # The engine's build wants the NDK's own place, which is where the
-          # step above puts it.
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+          # step above put it.
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         working-directory: app
         run: ./gradlew assembleDebug --stacktrace
 
