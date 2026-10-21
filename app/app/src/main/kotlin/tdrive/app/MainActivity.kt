@@ -256,10 +256,23 @@ fun FilesTab(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = "This folder is empty.",
+                text = if (state.files.isEmpty()) {
+                    // The drive is open, and holds nothing the reader can see.
+                    "This drive holds ${state.drive?.items ?: 0} items, and none of them are here."
+                } else {
+                    "This folder is empty."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            state.error?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
         return
     }
