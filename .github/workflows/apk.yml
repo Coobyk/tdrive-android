@@ -84,11 +84,16 @@ jobs:
           path: app/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
-      - name: The release
+      - name: The release's APK
         # A tagged build is published with the release, so the version can be
-        # installed from the releases page.
+        # installed from the releases page. The APK keeps one name in every
+        # release, so the link to it is the same shape every time.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cp app/app/build/outputs/apk/debug/app-debug.apk tdrive-android.apk
+      - name: The release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: app/app/build/outputs/apk/debug/app-debug.apk
+          files: tdrive-android.apk
           generate_release_notes: true
