@@ -1,8 +1,22 @@
+import org.gradle.api.tasks.Exec
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// The version the phone shows.
+//
+// The number is what Android compares when an update is offered, so it has to
+// grow with every build; the build passes the number it wants, and the run's
+// own count is what the workflow hands it.
+// The names are not the extension's own: inside the block below, the
+// extension's property would shadow them, and the version would be set to
+// nothing.
+val buildVersionCode = (project.findProperty("tdrive.versionCode") as String?)?.toIntOrNull() ?: 1
+val buildVersionName = (project.findProperty("tdrive.versionName") as String?) ?: "0.1.0"
 
 android {
     namespace = "tdrive.app"
@@ -14,8 +28,8 @@ android {
         // asks for the same permissions.
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = buildVersionCode
+        versionName = buildVersionName
 
         // The engine is built for the phone's own architectures, and for the
         // emulator's.
@@ -24,10 +38,37 @@ android {
         }
     }
 
+    signingConfigs {
+        // The application's own key, when the build has one.
+        //
+        // A key that changes with every build is a key that cannot be updated
+        // over: Android refuses an update whose signature differs from the
+        // installed one's, so the reader would have to uninstall and sign in
+        // again for every build. The key lives in the build's secrets, and a
+        // build without them falls back to the debug key.
+        create("tdrive") {
+            val encoded = System.getenv("TDrive_KEYSTORE")
+            if (encoded != null) {
+                val store = file("tdrive-release.keystore")
+                store.writeBytes(Base64.getDecoder().decode(encoded))
+                this.storeFile = store
+                this.storePassword = System.getenv("TDrive_KEYSTORE_PASSWORD")
+                this.keyAlias = System.getenv("TDrive_KEY_ALIAS")
+                this.keyPassword = System.getenv("TDrive_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // The key the build has, or the debug key when it has none.
+            signingConfig = if (System.getenv("TDrive_KEYSTORE") != null) {
+                signingConfigs.getByName("tdrive")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
@@ -70,9 +111,6 @@ val engineTargets = mapOf(
     "x86_64" to "x86_64-linux-android",
 )
 
-// The engine's crate lives beside the application, and the path is read
-// against the root of the build so it means the same thing wherever the
-// build is run from.
 val engineDir = rootProject.file(providers.gradleProperty("tdrive.engine.directory").get())
 val engineOutput = file("src/main/jniLibs")
 val ndkHome = System.getenv("ANDROID_NDK_HOME")

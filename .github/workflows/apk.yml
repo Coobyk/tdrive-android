@@ -1,8 +1,8 @@
 name: Build the APK
 
 # The phone application is built on every push, so there is always an APK to
-# install: a debug-signed one from the artefacts of the run, and a release
-# one when a version is tagged.
+# install: a signed one from the artefacts of the run, and a release one when
+# a version is tagged.
 on:
   push:
     branches: [main]
@@ -74,14 +74,31 @@ jobs:
           # The engine's build wants the NDK's own place, which is where the
           # step above put it.
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          # The application's own key, so one build can be updated over the
+          # last: Android refuses an update whose signature differs.
+          TDrive_KEYSTORE: ${{ secrets.TDrive_KEYSTORE }}
+          TDrive_KEYSTORE_PASSWORD: ${{ secrets.TDrive_KEYSTORE_PASSWORD }}
+          TDrive_KEY_ALIAS: ${{ secrets.TDrive_KEY_ALIAS }}
+          TDrive_KEY_PASSWORD: ${{ secrets.TDrive_KEY_PASSWORD }}
         working-directory: app
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          # The version grows with every build, so a new APK is always an
+          # update and never a question of which one is newer.
+          VERSION_CODE=$((1000 + ${{ github.run_number }}))
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION_NAME="${{ github.ref_name }}"
+          else
+            VERSION_NAME="0.1.0-dev.${{ github.run_number }}"
+          fi
+          ./gradlew assembleRelease --stacktrace \
+            -Ptdrive.versionCode="$VERSION_CODE" \
+            -Ptdrive.versionName="$VERSION_NAME"
 
       - name: The APK
         uses: actions/upload-artifact@v4
         with:
           name: tdrive-android
-          path: app/app/build/outputs/apk/debug/app-debug.apk
+          path: app/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
       - name: The release's APK
@@ -90,7 +107,8 @@ jobs:
         # release, so the link to it is the same shape every time.
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          cp app/app/build/outputs/apk/debug/app-debug.apk tdrive-android.apk
+          cp app/app/build/outputs/apk/release/app-release.apk tdrive-android.apk
+
       - name: The release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
