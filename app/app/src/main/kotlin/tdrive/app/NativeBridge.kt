@@ -13,8 +13,35 @@ import org.json.JSONObject
  */
 object NativeBridge {
 
-    init {
-        System.loadLibrary("tdrive-engine")
+    /**
+     * The engine's library, loaded when it is first needed.
+     *
+     * The name is the library's own: Android's loader takes it verbatim, and
+     * Rust names a library with underscores where the crate has dashes, so
+     * `tdrive_engine` is the name and `tdrive-engine` is not.
+     */
+    private var loaded = false
+
+    /** Why the library could not be loaded, when it could not. */
+    var loadError: String? = null
+        private set
+
+    /**
+     * Load the engine's library.
+     *
+     * A failure here is reported rather than thrown: an application that
+     * cannot load its engine should say so on the screen, not vanish.
+     */
+    fun load() {
+        if (loaded) return
+        loaded = true
+        try {
+            System.loadLibrary("tdrive_engine")
+        } catch (error: UnsatisfiedLinkError) {
+            loadError = error.message ?: "the engine's library could not be loaded"
+        } catch (error: SecurityException) {
+            loadError = error.message ?: "the engine's library could not be loaded"
+        }
     }
 
     /** Set the engine up. */

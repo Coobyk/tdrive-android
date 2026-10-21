@@ -71,6 +71,17 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         run {
+            // The engine's library is loaded first, and a failure is reported
+            // rather than thrown: an application that cannot load its engine
+            // should say so, not vanish.
+            NativeBridge.load()
+            val failure = NativeBridge.loadError
+            if (failure != null) {
+                _state.value = _state.value.copy(
+                    error = "The engine could not be loaded: $failure",
+                )
+                return@run
+            }
             NativeBridge.nativeInit()
             val (themes, active) = themesOf(NativeBridge.nativeThemes())
             _state.value = _state.value.copy(themes = themes, themeId = active)

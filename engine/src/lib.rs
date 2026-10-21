@@ -110,6 +110,18 @@ fn failure(message: &str) -> Value {
     json!({ "ok": false, "error": message })
 }
 
+/// Run a call, and turn a panic into an error the phone can show.
+///
+/// The engine is the application's own code, so a panic in it is a bug rather
+/// than a reason to take the phone down with it: the phone is told what
+/// happened, and carries on.
+fn guarded(block: impl FnOnce() -> Value) -> Value {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(block)) {
+        Ok(value) => value,
+        Err(_) => failure("the engine stopped unexpectedly"),
+    }
+}
+
 /// The result the phone is told about.
 fn success() -> Value {
     json!({ "ok": true })
@@ -257,7 +269,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeInit<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = bridge::init();
+    let result = guarded(|| bridge::init());
     json_string(&mut env, &result)
 }
 
@@ -288,7 +300,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeSignIn<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = bridge::sign_in(api_id as i32, &api_hash, &phone);
+    let result = guarded(|| bridge::sign_in(api_id as i32, &api_hash, &phone));
     json_string(&mut env, &result)
 }
 
@@ -328,7 +340,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeVerifyCode<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = bridge::verify_code(&code);
+    let result = guarded(|| bridge::verify_code(&code));
     json_string(&mut env, &result)
 }
 
@@ -362,7 +374,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeVerifyPassword<'local>
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = bridge::verify_password(&password);
+    let result = guarded(|| bridge::verify_password(&password));
     json_string(&mut env, &result)
 }
 
@@ -386,7 +398,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeSignOut<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = bridge::sign_out();
+    let result = guarded(|| bridge::sign_out());
     json_string(&mut env, &result)
 }
 
@@ -398,7 +410,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeListDrives<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = bridge::list_drives();
+    let result = guarded(|| bridge::list_drives());
     json_string(&mut env, &result)
 }
 
@@ -421,7 +433,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeOpenDrive<'local>(
     channel_id: jint,
     access_hash: jint,
 ) -> jstring {
-    let result = bridge::open_drive(channel_id as i64, access_hash as i64);
+    let result = guarded(|| bridge::open_drive(channel_id as i64, access_hash as i64));
     json_string(&mut env, &result)
 }
 
@@ -508,7 +520,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDriveState<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = bridge::drive_state();
+    let result = guarded(|| bridge::drive_state());
     json_string(&mut env, &result)
 }
 
@@ -518,7 +530,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeFilesJson<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = bridge::files_json();
+    let result = guarded(|| bridge::files_json());
     json_string(&mut env, &result)
 }
 
@@ -589,7 +601,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeUnlock<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = bridge::unlock(&password);
+    let result = guarded(|| bridge::unlock(&password));
     json_string(&mut env, &result)
 }
 
@@ -623,7 +635,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDownload<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = bridge::download(message_id as i32, &dest);
+    let result = guarded(|| bridge::download(message_id as i32, &dest));
     json_string(&mut env, &result)
 }
 
@@ -678,7 +690,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeUpload<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = bridge::upload(&path, &parent, encrypt != 0);
+    let result = guarded(|| bridge::upload(&path, &parent, encrypt != 0));
     json_string(&mut env, &result)
 }
 
@@ -722,7 +734,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeTrash<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = bridge::trash(&object_id, revision as i64, restore != 0);
+    let result = guarded(|| bridge::trash(&object_id, revision as i64, restore != 0));
     json_string(&mut env, &result)
 }
 
@@ -773,7 +785,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeMkdir<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = bridge::mkdir(&parent, &name);
+    let result = guarded(|| bridge::mkdir(&parent, &name));
     json_string(&mut env, &result)
 }
 
@@ -800,7 +812,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDerivative<'local>(
     _class: JClass<'local>,
     message_id: jint,
 ) -> jstring {
-    let result = bridge::derivative(message_id as i32);
+    let result = guarded(|| bridge::derivative(message_id as i32));
     json_string(&mut env, &result)
 }
 
@@ -908,6 +920,6 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeThemes<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = bridge::themes_json();
+    let result = guarded(|| bridge::themes_json());
     json_string(&mut env, &result)
 }
