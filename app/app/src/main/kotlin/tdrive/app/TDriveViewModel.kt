@@ -82,9 +82,22 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
                 )
                 return@run
             }
-            NativeBridge.nativeInit()
+            // The engine keeps its files where the application says: a phone
+            // has one place it may write to.
+            val files = getApplication<Application>().filesDir.absolutePath
+            NativeBridge.nativeInit(files)
+            // The credentials the application has stored, if it has any: the
+            // sign-in screen comes up filled in rather than empty.
+            val stored = jsonOf(NativeBridge.nativeCredentials())
+            val apiId = stored?.optInt("apiId") ?: 0
+            val apiHash = stored?.optString("apiHash") ?: "" 
             val (themes, active) = themesOf(NativeBridge.nativeThemes())
-            _state.value = _state.value.copy(themes = themes, themeId = active)
+            _state.value = _state.value.copy(
+                themes = themes,
+                themeId = active,
+                apiId = if (apiId > 0) apiId.toString() else _state.value.apiId,
+                apiHash = if (apiHash.isNotEmpty()) apiHash else _state.value.apiHash,
+            )
             if (NativeBridge.nativeSessionState() == "ready") {
                 openTheSavedDrive()
             }

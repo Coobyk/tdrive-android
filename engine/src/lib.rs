@@ -140,6 +140,21 @@ pub mod bridge {
         with_engine(|_| success()).unwrap_or_else(|| failure("the engine is not there"))
     }
 
+    /// The credentials the application has stored, if it has any.
+    ///
+    /// The phone asks for them the first time, and remembers them after that;
+    /// this is how the sign-in screen comes up filled in.
+    pub fn credentials() -> Value {
+        match tdrive_rs::config::load_credentials() {
+            Some(credentials) => json!({
+                "ok": true,
+                "apiId": credentials.api_id,
+                "apiHash": credentials.api_hash,
+            }),
+            None => json!({ "ok": true, "apiId": 0, "apiHash": "" }),
+        }
+    }
+
     /// Whether the account is signed in.
     pub fn session_state() -> String {
         with_engine(|engine| {
@@ -268,8 +283,32 @@ pub mod bridge {
 pub extern "system" fn Java_tdrive_app_NativeBridge_nativeInit<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
+    data_dir: JString<'local>,
 ) -> jstring {
-    let result = guarded(|| bridge::init());
+    let data_dir = match read_string(&mut env, &data_dir) {
+        Ok(value) => value,
+        Err(message) => return json_string(&mut env, &failure(&message)),
+    };
+    // The application says where its files live: a phone has one place it may
+    // write to and no platform place of its own, and a relative path is one
+    // the phone cannot open.
+    let result = guarded(|| {
+        tdrive_rs::config::set_data_dir(data_dir.clone());
+        if let Err(message) = tdrive_rs::config::ensure_data_dir() {
+            return failure(&message);
+        }
+        bridge::init()
+    });
+    json_string(&mut env, &result)
+}
+
+/// The credentials the application has stored, if it has any.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tdrive_app_NativeBridge_nativeCredentials<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    let result = guarded(|| bridge::credentials());
     json_string(&mut env, &result)
 }
 

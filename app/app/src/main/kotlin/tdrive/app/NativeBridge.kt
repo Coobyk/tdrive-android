@@ -44,8 +44,16 @@ object NativeBridge {
         }
     }
 
-    /** Set the engine up. */
-    external fun nativeInit(): String
+    /**
+     * Set the engine up, and tell it where the application's files live.
+     *
+     * A phone has one place it may write to and no platform place of its own,
+     * so the application says which.
+     */
+    external fun nativeInit(dataDir: String): String
+
+    /** The credentials the application has stored, if it has any. */
+    external fun nativeCredentials(): String
 
     /** `ready` when the account is signed in, `none` when it is not. */
     external fun nativeSessionState(): String
