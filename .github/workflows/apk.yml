@@ -1,0 +1,84 @@
+name: Build the APK
+
+# The phone application is built on every push, so there is always an APK to
+# install: a debug-signed one from the artefacts of the run, and a release
+# one when a version is tagged.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: The phone application
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # The engine is built for the phone's own architectures, and for
+          # the emulator's.
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: cargo-ndk
+        # The helper that wires the NDK's linker to the Rust targets.
+        run: cargo install cargo-ndk --locked
+
+      - name: The Rust build's cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: engine-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock') }}
+          restore-keys: |
+            engine-${{ runner.os }}-
+
+      - name: The Android SDK
+        run: |
+          SDKMANAGER="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: The Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+      - name: The engine's own tests
+        working-directory: engine
+        run: cargo test
+
+      - name: The application
+        uses: gradle/actions/setup-gradle@v4
+        env:
+          # The engine's build wants the NDK's own place, which is where the
+          # step above puts it.
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+        working-directory: app
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: The APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tdrive-android
+          path: app/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: The release
+        # A tagged build is published with the release, so the version can be
+        # installed from the releases page.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/app/build/outputs/apk/debug/app-debug.apk
+          generate_release_notes: true
