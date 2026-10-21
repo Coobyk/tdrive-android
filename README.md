@@ -33,6 +33,23 @@ The APK lands in `app/app/build/outputs/apk/debug/`. The engine's libraries
 are in the application itself: there is nothing to install beside it, and
 nothing is loaded at run time.
 
+There is a [build on the releases page](https://github.com/Coobyk/tdrive-android/releases),
+signed with the debug key and meant for sideloading.
+
+## What has been walked, and what has not
+
+The engine's calls are a module of their own, so they can be walked without a
+phone: the test signs in with the session, lists the drives, opens one,
+unlocks it, takes the small picture published beside a file and brings a file
+down whole. That passes against a real drive.
+
+The application itself has **not been run on a device yet** — the machine this
+was built on has no Android emulator and no hardware acceleration, so the
+build is verified by its contents: the engine's libraries are real ARM and
+x86 Android binaries, the bridge's seventeen entry points are exported from
+them, the manifest asks for the network and nothing else, and there is no web
+view anywhere in it. What that does not cover is the screen itself.
+
 ## What it does
 
 - Sign in to Telegram, with the code and the two-factor password when the
