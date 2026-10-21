@@ -11,7 +11,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # The release step needs to write the release; nothing else does.
+  contents: write
 
 jobs:
   apk:
