@@ -115,6 +115,140 @@ fn success() -> Value {
     json!({ "ok": true })
 }
 
+
+/// The engine's own calls, without the JNI around them.
+///
+/// The phone's bridge is a thin layer over these: the same answers and the
+/// same documents, so the calls can be walked without a phone in the room.
+pub mod bridge {
+    use super::*;
+
+    /// Set the engine up.
+    pub fn init() -> Value {
+        with_engine(|_| success()).unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// Whether the account is signed in.
+    pub fn session_state() -> String {
+        with_engine(|engine| {
+            if engine.client.is_some() {
+                "ready".to_string()
+            } else {
+                "none".to_string()
+            }
+        })
+        .unwrap_or_else(|| "none".to_string())
+    }
+
+    /// Sign in, and ask for the code.
+    pub fn sign_in(api_id: i32, api_hash: &str, phone: &str) -> Value {
+        with_engine(|engine| super::sign_in(engine, api_id, api_hash, phone))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// Check the code the account was sent.
+    pub fn verify_code(code: &str) -> Value {
+        with_engine(|engine| super::verify_code(engine, code))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// Check the password the account has.
+    pub fn verify_password(password: &str) -> Value {
+        with_engine(|engine| super::verify_password(engine, password))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// Forget the account.
+    pub fn sign_out() -> Value {
+        with_engine(|engine| {
+            engine.client = None;
+            engine.drive = None;
+            success()
+        })
+        .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// The channels this account may use as a drive.
+    pub fn list_drives() -> Value {
+        with_engine(|engine| {
+            let Some(client) = engine.client.as_ref() else {
+                return failure("not signed in");
+            };
+            match tele::list_owned_channels(client) {
+                Ok(channels) => {
+                    let list: Vec<Value> = channels.iter().map(super::channel_json).collect();
+                    json!({ "ok": true, "drives": list })
+                }
+                Err(message) => failure(&message),
+            }
+        })
+        .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// Open a drive and read it.
+    pub fn open_drive(channel_id: i64, access_hash: i64) -> Value {
+        with_engine(|engine| super::open_drive(engine, channel_id, access_hash))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// The drive that is open.
+    pub fn drive_state() -> Value {
+        with_engine(|engine| super::drive_json(engine))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// The files of the drive, and its trash.
+    pub fn files_json() -> Value {
+        with_engine(|engine| {
+            let files: Vec<Value> = engine.state.files.iter().map(super::file_json).collect();
+            let trash = super::trash_json(engine);
+            json!({ "ok": true, "files": files, "trash": trash })
+        })
+        .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// Unlock the drive.
+    pub fn unlock(password: &str) -> Value {
+        with_engine(|engine| super::unlock(engine, password))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// Fetch a file and write it where the phone asked.
+    pub fn download(message_id: i32, dest: &str) -> Value {
+        with_engine(|engine| super::download(engine, message_id, dest))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// Send a file to the drive.
+    pub fn upload(path: &str, parent: &str, encrypt: bool) -> Value {
+        with_engine(|engine| super::upload(engine, path, parent, encrypt))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// Move a file to the trash, and put it back.
+    pub fn trash(object_id: &str, revision: i64, restore: bool) -> Value {
+        with_engine(|engine| super::trash(engine, object_id, revision, restore))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// Create a folder.
+    pub fn mkdir(parent: &str, name: &str) -> Value {
+        with_engine(|engine| super::mkdir(engine, parent, name))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// The small picture published beside a file.
+    pub fn derivative(message_id: i32) -> Value {
+        with_engine(|engine| super::derivative(engine, message_id))
+            .unwrap_or_else(|| failure("the engine is not there"))
+    }
+
+    /// The theme catalogue.
+    pub fn themes_json() -> Value {
+        super::themes_json()
+    }
+}
+
 // --- The session ------------------------------------------------------------
 
 /// Set the engine up.
@@ -123,7 +257,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeInit<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = with_engine(|_| success()).unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::init();
     json_string(&mut env, &result)
 }
 
@@ -133,15 +267,8 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeSessionState<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let state = with_engine(|engine| {
-        if engine.client.is_some() {
-            "ready"
-        } else {
-            "none"
-        }
-    })
-    .unwrap_or("none");
-    string(&mut env, state)
+    let state = bridge::session_state();
+    string(&mut env, &state)
 }
 
 /// Sign in: the code is sent to the account's Telegram.
@@ -161,8 +288,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeSignIn<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = with_engine(|engine| sign_in(engine, api_id as i32, &api_hash, &phone))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::sign_in(api_id as i32, &api_hash, &phone);
     json_string(&mut env, &result)
 }
 
@@ -202,8 +328,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeVerifyCode<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = with_engine(|engine| verify_code(engine, &code))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::verify_code(&code);
     json_string(&mut env, &result)
 }
 
@@ -237,8 +362,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeVerifyPassword<'local>
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = with_engine(|engine| verify_password(engine, &password))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::verify_password(&password);
     json_string(&mut env, &result)
 }
 
@@ -262,12 +386,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeSignOut<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = with_engine(|engine| {
-        engine.client = None;
-        engine.drive = None;
-        success()
-    })
-    .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::sign_out();
     json_string(&mut env, &result)
 }
 
@@ -279,19 +398,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeListDrives<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = with_engine(|engine| {
-        let Some(client) = engine.client.as_ref() else {
-            return failure("not signed in");
-        };
-        match tele::list_owned_channels(client) {
-            Ok(channels) => {
-                let list: Vec<Value> = channels.iter().map(channel_json).collect();
-                json!({ "ok": true, "drives": list })
-            }
-            Err(message) => failure(&message),
-        }
-    })
-    .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::list_drives();
     json_string(&mut env, &result)
 }
 
@@ -314,8 +421,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeOpenDrive<'local>(
     channel_id: jint,
     access_hash: jint,
 ) -> jstring {
-    let result = with_engine(|engine| open_drive(engine, channel_id as i64, access_hash as i64))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::open_drive(channel_id as i64, access_hash as i64);
     json_string(&mut env, &result)
 }
 
@@ -402,8 +508,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDriveState<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = with_engine(|engine| drive_json(engine))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::drive_state();
     json_string(&mut env, &result)
 }
 
@@ -413,12 +518,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeFilesJson<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jstring {
-    let result = with_engine(|engine| {
-        let files: Vec<Value> = engine.state.files.iter().map(file_json).collect();
-        let trash = trash_json(engine);
-        json!({ "ok": true, "files": files, "trash": trash })
-    })
-    .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::files_json();
     json_string(&mut env, &result)
 }
 
@@ -489,8 +589,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeUnlock<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = with_engine(|engine| unlock(engine, &password))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::unlock(&password);
     json_string(&mut env, &result)
 }
 
@@ -524,8 +623,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDownload<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = with_engine(|engine| download(engine, message_id as i32, &dest))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::download(message_id as i32, &dest);
     json_string(&mut env, &result)
 }
 
@@ -580,8 +678,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeUpload<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = with_engine(|engine| upload(engine, &path, &parent, encrypt != 0))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::upload(&path, &parent, encrypt != 0);
     json_string(&mut env, &result)
 }
 
@@ -625,8 +722,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeTrash<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = with_engine(|engine| trash(engine, &object_id, revision as i64, restore != 0))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::trash(&object_id, revision as i64, restore != 0);
     json_string(&mut env, &result)
 }
 
@@ -677,8 +773,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeMkdir<'local>(
         Ok(value) => value,
         Err(message) => return json_string(&mut env, &failure(&message)),
     };
-    let result = with_engine(|engine| mkdir(engine, &parent, &name))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::mkdir(&parent, &name);
     json_string(&mut env, &result)
 }
 
@@ -705,8 +800,7 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDerivative<'local>(
     _class: JClass<'local>,
     message_id: jint,
 ) -> jstring {
-    let result = with_engine(|engine| derivative(engine, message_id as i32))
-        .unwrap_or_else(|| failure("the engine is not there"));
+    let result = bridge::derivative(message_id as i32);
     json_string(&mut env, &result)
 }
 
@@ -765,11 +859,7 @@ fn colour(value: u32) -> u64 {
 }
 
 /// The theme catalogue, as the phone reads it.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_tdrive_app_NativeBridge_nativeThemes<'local>(
-    mut env: JNIEnv<'local>,
-    _class: JClass<'local>,
-) -> jstring {
+fn themes_json() -> Value {
     let list: Vec<Value> = themes::THEMES
         .iter()
         .map(|theme| {
@@ -809,6 +899,15 @@ pub extern "system" fn Java_tdrive_app_NativeBridge_nativeThemes<'local>(
             })
         })
         .collect();
-    let result = json!({ "ok": true, "themes": list, "active": themes::active_id() });
+    json!({ "ok": true, "themes": list, "active": themes::active_id() })
+}
+
+/// The theme catalogue, as the phone reads it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tdrive_app_NativeBridge_nativeThemes<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    let result = bridge::themes_json();
     json_string(&mut env, &result)
 }

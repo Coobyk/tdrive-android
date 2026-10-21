@@ -7,7 +7,11 @@ publish = false
 [lib]
 # A static library the phone app links into its own shared object, so the
 # engine's code is inside the app's .so and nothing is loaded at run time.
-crate-type = ["staticlib", "cdylib"]
+# The ordinary library is there too, so the bridge can be walked by a test.
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dev-dependencies]
+serde_json = "1"
 
 [dependencies]
 # The engine itself: the drive's format, its Telegram transport and its
