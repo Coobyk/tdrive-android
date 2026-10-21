@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,10 +51,23 @@ data class TDriveState(
     // The appearance.
     val themes: List<Theme> = emptyList(),
     val themeId: String = "quiet-relay",
+
+    // How far the drive read has got, while it is reading.
+    val readProgress: ReadProgress? = null,
 ) {
     /** The theme in use. */
     val theme: Theme? get() = themes.firstOrNull { it.id == themeId }
 }
+
+/** How far the drive read has got. */
+data class ReadProgress(
+    /** The messages read from Telegram. */
+    val scanned: Long,
+    /** The operations found among them. */
+    val operations: Long,
+    /** How long Telegram has asked the read to wait, when it has. */
+    val waiting: Long?,
+)
 
 /**
  * The application's state.
@@ -122,6 +136,7 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
         block: suspend () -> Pair<TDriveState?, String?>?,
     ) {
         update { it.copy(working = true, message = message, error = null) }
+        watchTheRead()
         viewModelScope.launch {
             val (state, error) = withContext(Dispatchers.IO) { block() } ?: return@launch
             var carried = _state.value
@@ -131,6 +146,34 @@ class TDriveViewModel(application: Application) : AndroidViewModel(application) 
                 carried
             }
             if (error == null) next?.invoke(carried)
+        }
+    }
+
+    /**
+     * Keep the screen told where the drive read has got.
+     *
+     * A large drive takes a minute or more to read, and Telegram asks the
+     * read to wait now and then, so the reader is told what is happening
+     * rather than being left with a message that never changes.
+     */
+    private fun watchTheRead() {
+        viewModelScope.launch {
+            while (_state.value.working) {
+                delay(300)
+                val raw = jsonOf(NativeBridge.nativeDriveProgress())
+                val progress = ReadProgress(
+                    scanned = raw?.optLong("scanned") ?: 0L,
+                    operations = raw?.optLong("operations") ?: 0L,
+                    waiting = if (raw?.isNull("waiting") == false) raw.optLong("waiting") else null,
+                )
+                update { state ->
+                    if (state.readProgress != progress) {
+                        state.copy(readProgress = progress)
+                    } else {
+                        state
+                    }
+                }
+            }
         }
     }
 

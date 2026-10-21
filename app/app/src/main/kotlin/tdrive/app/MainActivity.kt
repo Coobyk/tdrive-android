@@ -5,6 +5,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -49,6 +56,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -249,6 +258,36 @@ fun FilesTab(
 ) {
     val folder = state.folder
     val files = state.files.filter { it.parent == folder }
+    if (state.working && state.files.isEmpty()) {
+        // The drive is being read, and a large one takes a while, so the
+        // screen says where the read has got.
+        val progress = state.readProgress
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "Reading the drive...",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Spacer(Modifier.height(10.dp))
+            ReadingBar()
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = when {
+                    progress == null -> "Reading the drive's operations from Telegram."
+                    progress.waiting != null ->
+                        "Telegram asked for a ${progress.waiting}-second pause; the read continues when it lets us."
+                    else -> "${progress.scanned} messages read · ${progress.operations} operations"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
     if (files.isEmpty()) {
         Column(
             modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -464,6 +503,44 @@ fun AccountTab(state: TDriveState, model: TDriveViewModel) {
             }
         }
     }
+}
+
+/** The bar that shows that the drive is being read. */
+@Composable
+fun ReadingBar() {
+    val sweep = rememberInfiniteTransitionLabel()
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(4.dp)
+            .clip(androidx.compose.ui.graphics.RectangleShape)
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.3f)
+                .height(4.dp)
+                .offset(x = 1000.dp * sweep)
+                .clip(androidx.compose.ui.graphics.RectangleShape)
+                .background(MaterialTheme.colorScheme.primary),
+        )
+    }
+}
+
+/** A sweep that goes from one end of the bar to the other, and back. */
+@Composable
+fun rememberInfiniteTransitionLabel(): Float {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "read")
+    val value by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = androidx.compose.animation.core.tween(1200),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "read",
+    )
+    return value
 }
 
 /** The dialog that asks for the encryption password. */

@@ -291,6 +291,17 @@ pub mod bridge {
     pub fn themes_json() -> Value {
         super::themes_json()
     }
+
+    /// How far the drive read has got.
+    pub fn progress() -> Value {
+        let progress = tdrive_rs::tele::last_progress();
+        json!({
+            "ok": true,
+            "scanned": progress.scanned,
+            "operations": progress.operations,
+            "waiting": progress.waiting,
+        })
+    }
 }
 
 // --- The session ------------------------------------------------------------
@@ -992,6 +1003,16 @@ fn themes_json() -> Value {
         })
         .collect();
     json!({ "ok": true, "themes": list, "active": themes::active_id() })
+}
+
+/// How far the drive read has got.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_tdrive_app_NativeBridge_nativeDriveProgress<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jstring {
+    let result = guarded(|| bridge::progress());
+    json_string(&mut env, &result)
 }
 
 /// The theme catalogue, as the phone reads it.

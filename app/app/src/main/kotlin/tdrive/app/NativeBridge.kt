@@ -103,6 +103,9 @@ object NativeBridge {
     /** The small picture published beside a file. */
     external fun nativeDerivative(messageId: Int): String
 
+    /** How far the drive read has got. */
+    external fun nativeDriveProgress(): String
+
     /** The theme catalogue. */
     external fun nativeThemes(): String
 }
