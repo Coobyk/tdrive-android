@@ -2,6 +2,7 @@ package dev.tdrive.app
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,7 +40,19 @@ sealed class Screen {
     data object Browser : Screen()
 }
 
-class Core(private val scope: CoroutineScope) {
+class Core private constructor(private val scope: CoroutineScope) {
+
+    companion object {
+        // Process-lifetime — the worker's event queue must have exactly one
+        // consumer, so the bridge survives Activity recreation.
+        @Volatile
+        private var instance: Core? = null
+
+        fun get(): Core = instance ?: synchronized(this) {
+            instance ?: Core(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
+                .also { instance = it }
+        }
+    }
 
     private val _screen = MutableStateFlow<Screen>(Screen.Setup)
     val screen = _screen.asStateFlow()
@@ -81,7 +94,9 @@ class Core(private val scope: CoroutineScope) {
     }
 
     private fun send(cmd: String, args: JSONObject = JSONObject()) {
-        val res = NativeCore.nativeDispatch(JSONObject().put("cmd", cmd).put("args", args).toString())
+        val obj = JSONObject().put("cmd", cmd)
+        if (args.length() > 0) obj.put("args", args)
+        val res = NativeCore.nativeDispatch(obj.toString())
         if (!JSONObject(res).optBoolean("ok", false)) {
             _status.value = "dispatch failed: $res"
         }
@@ -160,13 +175,14 @@ class Core(private val scope: CoroutineScope) {
                 listChannels()
             }
             "Channels" -> {
-                val arr = ev.getJSONObject("args").getJSONArray("0")
+                val arr = ev.getJSONArray("args")
                 val list = mutableListOf<ChannelInfo>()
                 for (i in 0 until arr.length()) {
                     val c = arr.getJSONObject(i)
                     list.add(ChannelInfo(c.getLong("id"), c.getLong("access_hash"), c.getString("title"), c.getString("kind")))
                 }
                 _channels.value = list
+                _screen.value = Screen.Channels
             }
             "ChannelOpened" -> {
                 val args = ev.getJSONObject("args")
@@ -212,7 +228,7 @@ class Core(private val scope: CoroutineScope) {
                 name = o.getString("name"),
                 kind = "dir",
                 size = 0,
-                parent = o.optString("parent").ifEmpty { null },
+                parent = o.optString("parent"),
                 trashed = trash?.has(id) == true,
             ))
         }
@@ -226,7 +242,7 @@ class Core(private val scope: CoroutineScope) {
                 name = o.getString("name"),
                 kind = "file",
                 size = o.optLong("size"),
-                parent = o.optString("parent").ifEmpty { null },
+                parent = o.optString("parent"),
                 trashed = trash?.has(id) == true,
             ))
         }

@@ -6,7 +6,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -29,7 +31,7 @@ import java.io.FileOutputStream
 
 class MainActivity : ComponentActivity() {
 
-    private val core by lazy { Core(lifecycleScope) }
+    private val core get() = Core.get()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,7 +82,10 @@ private fun Field(value: String, onChange: (String) -> Unit, label: String, pass
         label = { Text(label) },
         singleLine = true,
         visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-        keyboardOptions = KeyboardOptions(keyboardType = keyboard),
+        keyboardOptions = if (password)
+            KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false)
+        else
+            KeyboardOptions(keyboardType = keyboard),
         modifier = Modifier.fillMaxWidth(),
     )
 }
@@ -181,6 +186,7 @@ fun ChannelsScreen(core: Core) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun BrowserScreen(core: Core, ctx: Context) {
     val entries by core.entries.collectAsState()
@@ -266,9 +272,13 @@ fun BrowserScreen(core: Core, ctx: Context) {
                     leadingContent = {
                         Icon(if (e.kind == "dir") Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
                     },
-                    modifier = Modifier
-                        .clickable(enabled = e.kind == "dir" && !trashMode) { core.setCwd(e.id) }
-                        .clickable { selected = e },
+                    modifier = Modifier.combinedClickable(
+                        onClick = {
+                            if (e.kind == "dir" && !trashMode) core.setCwd(e.id)
+                            else selected = if (selected?.id == e.id) null else e
+                        },
+                        onLongClick = { selected = e },
+                    ),
                 )
             }
         }
