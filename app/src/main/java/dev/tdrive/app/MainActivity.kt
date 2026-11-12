@@ -12,6 +12,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +23,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -37,7 +40,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         core.start(filesDir.absolutePath)
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            MaterialTheme(
+                colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
+            ) {
                 Surface(Modifier.fillMaxSize()) { App(core, applicationContext) }
             }
         }
@@ -225,27 +230,54 @@ fun BrowserScreen(core: Core, ctx: Context) {
     val activeTransfers = transfers.values.filter { it.state == "Active" || it.state == "Paused" }
 
     Column(Modifier.fillMaxSize()) {
-        // Header
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("TDrive · $title", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), maxLines = 1)
-                TextButton(onClick = { core.setTrashMode(!trashMode); selected = null }) {
-                    Text(if (trashMode) "Files" else "Trash")
-                }
-                TextButton(onClick = { core.listChannels() }) { Text("Drives") }
+        // Titlebar — app wordmark left; view/session controls right.
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("TDrive", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            IconButton(onClick = { core.setTrashMode(!trashMode); selected = null }) {
+                Icon(if (trashMode) Icons.Default.Folder else Icons.Default.Delete, if (trashMode) "Files" else "Trash")
             }
-            if (!trashMode) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("root", style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable { core.setCwd("") })
-                    crumbs.forEach { (id, name) ->
-                        Text(" / $name", style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
+            IconButton(onClick = { core.listChannels() }) { Icon(Icons.Default.Apps, "Drives") }
+        }
+        HorizontalDivider()
+
+        // Working bar — where you are (path) + how much is here.
+        // The drive name is the root crumb; the terminal crumb is
+        // emphasized; trash gets a terminal crumb of its own.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val atRoot = !trashMode && cwd.isEmpty()
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (atRoot) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (atRoot) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable { core.setTrashMode(false); core.setCwd("") },
+                )
+                val tail = if (trashMode) listOf("" to "Trash") else crumbs
+                tail.forEachIndexed { i, (id, name) ->
+                    Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
+                    if (id.isEmpty() || i == tail.lastIndex) {
+                        Text(name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                    } else {
+                        Text(name, style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.clickable { core.setCwd(id) })
                     }
                 }
             }
+            Spacer(Modifier.width(8.dp))
+            Text("${visible.size} items", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         HorizontalDivider()
 
@@ -283,27 +315,6 @@ fun BrowserScreen(core: Core, ctx: Context) {
             }
         }
 
-        // Selection actions
-        selected?.let { e ->
-            HorizontalDivider()
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(e.name, Modifier.weight(1f), maxLines = 1, style = MaterialTheme.typography.bodySmall)
-                if (trashMode) {
-                    TextButton(onClick = { core.restore(e.id); selected = null }) { Text("Restore") }
-                    TextButton(onClick = { core.purge(e.id); selected = null }) { Text("Purge") }
-                } else {
-                    if (e.kind == "file") TextButton(onClick = { downloadFor = e }) { Text("Get") }
-                    TextButton(onClick = { showRename = e }) { Text("Rename") }
-                    TextButton(onClick = { showMove = e }) { Text("Move") }
-                    TextButton(onClick = { core.delete(e.id); selected = null }) { Text("Delete") }
-                }
-            }
-        }
-
         // Transfers
         if (activeTransfers.isNotEmpty()) {
             HorizontalDivider()
@@ -323,32 +334,50 @@ fun BrowserScreen(core: Core, ctx: Context) {
             }
         }
 
-        // Action bar
+        // Contextual bar — one persistent slot at the bottom. Selection
+        // actions when something's selected, create/ops otherwise.
         HorizontalDivider()
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            var menu by remember { mutableStateOf(false) }
-            if (!trashMode) {
-                UploadButton(core, ctx)
-                TextButton(onClick = { showMkdir = true }) { Text("New folder") }
-                TextButton(onClick = { core.sync() }) { Text("Sync") }
-            } else {
-                TextButton(onClick = { core.emptyTrash() }) { Text("Empty trash") }
-            }
-            Spacer(Modifier.weight(1f))
-            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, null) }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                if (vault.configured) {
-                    DropdownMenuItem(text = { Text(if (vault.unlocked) "Lock vault" else "Unlock vault") },
-                        onClick = { menu = false; if (vault.unlocked) core.lock() else showUnlock = true })
+            val sel = selected
+            if (sel != null) {
+                Text(sel.name, Modifier.weight(1f).padding(start = 8.dp), maxLines = 1, style = MaterialTheme.typography.bodySmall)
+                if (trashMode) {
+                    IconButton(onClick = { core.restore(sel.id); selected = null }) { Icon(Icons.Default.Undo, "Restore") }
+                    IconButton(onClick = { core.purge(sel.id); selected = null }) { Icon(Icons.Default.DeleteForever, "Purge") }
                 } else {
-                    DropdownMenuItem(text = { Text("Enable encryption") }, onClick = { menu = false; showEnable = true })
+                    if (sel.kind == "file") IconButton(onClick = { downloadFor = sel }) { Icon(Icons.Default.Download, "Get") }
+                    IconButton(onClick = { showRename = sel }) { Icon(Icons.Default.Edit, "Rename") }
+                    IconButton(onClick = { showMove = sel }) { Icon(Icons.Default.DriveFileMove, "Move") }
+                    IconButton(onClick = { core.delete(sel.id); selected = null }) { Icon(Icons.Default.Delete, "Delete") }
                 }
-                DropdownMenuItem(text = { Text("Optimize drive") }, onClick = { menu = false; showOptimize = true })
-                DropdownMenuItem(text = { Text("Resume uploads") }, onClick = { menu = false; core.resumeUploads() })
+                IconButton(onClick = { selected = null }) { Icon(Icons.Default.Close, "Deselect") }
+            } else {
+                var menu by remember { mutableStateOf(false) }
+                if (!trashMode) {
+                    UploadButton(core, ctx)
+                    TextButton(onClick = { showMkdir = true }) { Text("New folder") }
+                    IconButton(onClick = { core.sync() }) { Icon(Icons.Default.Refresh, "Sync") }
+                } else {
+                    TextButton(onClick = { core.emptyTrash() }) { Text("Empty trash") }
+                }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Tools") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    if (vault.configured) {
+                        DropdownMenuItem(text = { Text(if (vault.unlocked) "Lock vault" else "Unlock vault") },
+                            onClick = { menu = false; if (vault.unlocked) core.lock() else showUnlock = true })
+                    } else {
+                        DropdownMenuItem(text = { Text("Enable encryption") }, onClick = { menu = false; showEnable = true })
+                    }
+                    DropdownMenuItem(text = { Text("Optimize drive") }, onClick = { menu = false; showOptimize = true })
+                    DropdownMenuItem(text = { Text("Resume uploads") }, onClick = { menu = false; core.resumeUploads() })
+                }
             }
         }
     }
