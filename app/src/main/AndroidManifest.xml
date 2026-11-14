@@ -3,7 +3,7 @@
     <application
         android:label="TDrive"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.NoTitleBar">
+        android:icon="@mipmap/ic_launcher" android:theme="@android:style/Theme.NoTitleBar">
         <activity
             android:name=".MainActivity"
             android:exported="true">
