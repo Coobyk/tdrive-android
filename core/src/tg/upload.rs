@@ -3,6 +3,32 @@
 use super::*;
 
 impl Worker {
+    /// Remote filename that doesn't collide — checks the projected
+    /// namespace plus names already claimed this session, then
+    /// appends " (n)" before the extension until it's free.
+    fn unique_remote_name(&mut self, parent: &str, name: &str) -> String {
+        let taken = |n: &str| {
+            self.namespace.list(parent).iter().any(|e| e.name() == n)
+                || self
+                    .reserved_names
+                    .contains(&format!("{parent}\0{n}"))
+        };
+        let pick = if taken(name) {
+            let (stem, ext) = match name.rsplit_once('.') {
+                Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+                _ => (name.to_string(), String::new()),
+            };
+            (1..1000)
+                .map(|i| format!("{stem} ({i}){ext}"))
+                .find(|c| !taken(c))
+                .unwrap_or_else(|| name.to_string())
+        } else {
+            name.to_string()
+        };
+        self.reserved_names.insert(format!("{parent}\0{pick}"));
+        pick
+    }
+
     pub(super) async fn resume_uploads(&mut self) -> Result<()> {
         let channel_id = self
             .channel()
@@ -26,6 +52,32 @@ impl Worker {
                 });
             }
         }
+        // Journaled downloads restart too — confirmed_bytes resumes
+        // each one mid-part. Without this a dead app meant starting over.
+        let jobs: Vec<crate::journal::DownloadJob> = self
+            .journal
+            .downloads
+            .iter()
+            .filter(|j| j.channel_id == channel_id)
+            .cloned()
+            .collect();
+        for job in jobs {
+            if !job.dest.parent().map(|p| p.exists()).unwrap_or(false) {
+                self.journal.downloads.retain(|j| j.file_id != job.file_id);
+                continue;
+            }
+            let id = download_transfer_id(&job.file_id);
+            let name = job.name.clone();
+            if let Err(e) = self.spawn_cancellable(&id, &name, move |ctx| async move {
+                Self::run_download_task(&ctx, job).await
+            }) {
+                self.emit(Event::Error {
+                    context: "download",
+                    message: format!("{e:#}"),
+                });
+            }
+        }
+        self.save_journal();
         Ok(())
     }
 
@@ -40,6 +92,7 @@ impl Worker {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "unnamed".into());
+        let name = self.unique_remote_name(&parent, &name);
 
         // Encryption is staged inside the task — even multi-GB encrypts
         // never block the command loop.

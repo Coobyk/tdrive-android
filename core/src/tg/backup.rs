@@ -76,4 +76,61 @@ impl Worker {
         }
         self.backup_photos(paths).await
     }
+
+    /// Register a local↔remote sync pair and upload whatever's new
+    /// right away — dedupes on the local path.
+    pub(super) async fn add_sync_pair(
+        &mut self,
+        local: PathBuf,
+        remote: String,
+    ) -> Result<()> {
+        if !self
+            .journal
+            .sync_pairs
+            .iter()
+            .any(|p| p.local == local && p.remote == remote)
+        {
+            self.journal.sync_pairs.push(crate::journal::SyncPair {
+                local: local.clone(),
+                remote: remote.clone(),
+            });
+            self.save_journal();
+        }
+        let paths: Vec<PathBuf> = std::fs::read_dir(&local)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_file())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for path in paths {
+            let key = path.to_string_lossy().to_string();
+            if self.journal.backup_seen.contains(&key) {
+                continue;
+            }
+            if let Err(e) = self.upload(path.clone(), remote.clone()).await {
+                self.emit(Event::Error {
+                    context: "folder sync",
+                    message: format!("{}: {e:#}", path.display()),
+                });
+            } else {
+                self.journal.backup_seen.insert(key);
+                self.save_journal();
+            }
+        }
+        Ok(())
+    }
+
+    /// Tick every registered sync pair — uploads files that appeared
+    /// since the last pass (ledger-driven, so restarts are safe).
+    pub(super) async fn sync_tick(&mut self) -> Result<()> {
+        let pairs = self.journal.sync_pairs.clone();
+        for pair in pairs {
+            // A deleted remote folder just errors its uploads — the
+            // pair stays so a restored folder resumes syncing.
+            self.add_sync_pair(pair.local, pair.remote).await?;
+        }
+        Ok(())
+    }
 }

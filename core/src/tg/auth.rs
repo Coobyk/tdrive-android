@@ -3,6 +3,12 @@ use super::*;
 
 impl Worker {
     pub(super) async fn connect(&mut self, api_id: i32, api_hash: String) -> Result<()> {
+        // A reconnect must kill the old runner — two live connections
+        // on one auth key trip AUTH_KEY_DUPLICATED server-side.
+        if let Some(h) = self.pool_runner.take() {
+            h.abort();
+        }
+        self.client = None;
         let session_path = crate::paths::session_path()?;
         let session = SqliteSession::open(session_path).await?;
         let pool = SenderPool::with_configuration(
@@ -11,13 +17,14 @@ impl Worker {
             grammers_client::sender::ConnectionParams {
                 retry_policy: Box::new(FloodSleep {
                     tx: self.tx.clone(),
+                    countdown: std::sync::Mutex::new(None),
                 }),
                 ..Default::default()
             },
         );
         let client = Client::new(pool.handle.clone());
         let mut updates = pool.updates;
-        tokio::spawn(pool.runner.run());
+        self.pool_runner = Some(tokio::spawn(pool.runner.run()));
         // Any incoming update hints at new history — trigger a (cheap)
         // incremental sync back through the command queue.
         let cmd_tx = self.cmd_tx.clone();
@@ -34,21 +41,53 @@ impl Worker {
             }
         });
         self.api_hash = api_hash;
+        self.api_id = api_id;
         self.client = Some(client);
         let authorized = self.client()?.is_authorized().await.unwrap_or(false);
         self.emit(Event::Connected { authorized });
         Ok(())
     }
 
+    /// The stored auth key is dead — Telegram flagged it as used by
+    /// another client (session copied, stale key, second instance).
+    /// Nothing recovers a 406'd key: wipe the session db and connect
+    /// fresh, which mints a new auth key server-side.
+    async fn reconnect_fresh_session(&mut self) -> Result<()> {
+        if let Some(h) = self.pool_runner.take() {
+            h.abort();
+        }
+        self.client = None;
+        let base = crate::paths::session_path()?;
+        for suffix in ["", "-shm", "-wal", "-journal"] {
+            let _ = std::fs::remove_file(format!("{}{}", base.display(), suffix));
+        }
+        self.connect(self.api_id, self.api_hash.clone()).await
+    }
+
     pub(super) async fn request_code(&mut self, phone: String) -> Result<()> {
-        let token = self
+        match self
             .client()?
             .request_login_code(&phone, &self.api_hash)
             .await
-            .map_err(|e| anyhow!("request code: {e}"))?;
-        self.login_token = Some(token);
-        self.emit(Event::CodeSent);
-        Ok(())
+        {
+            Ok(token) => {
+                self.login_token = Some(token);
+                self.emit(Event::CodeSent);
+                Ok(())
+            }
+            Err(e) if e.to_string().contains("AUTH_KEY_DUPLICATED") => {
+                self.reconnect_fresh_session().await?;
+                let token = self
+                    .client()?
+                    .request_login_code(&phone, &self.api_hash)
+                    .await
+                    .map_err(|e| anyhow!("request code: {e}"))?;
+                self.login_token = Some(token);
+                self.emit(Event::CodeSent);
+                Ok(())
+            }
+            Err(e) => Err(anyhow!("request code: {e}")),
+        }
     }
 
     pub(super) async fn submit_code(&mut self, code: String) -> Result<()> {

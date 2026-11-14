@@ -209,6 +209,12 @@ fun BrowserScreen(core: Core, ctx: Context) {
     var showEnable by remember { mutableStateOf(false) }
     var showOptimize by remember { mutableStateOf(false) }
     var downloadFor by remember { mutableStateOf<NsEntry?>(null) }
+    var showInfo by remember { mutableStateOf<NsEntry?>(null) }
+    var searchActive by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var sortSize by remember { mutableStateOf(false) }
+    var sortDesc by remember { mutableStateOf(false) }
+    var sortMenu by remember { mutableStateOf(false) }
 
     val crumbs = remember(entries, cwd) {
         val path = mutableListOf<Pair<String, String>>()
@@ -221,10 +227,24 @@ fun BrowserScreen(core: Core, ctx: Context) {
         path
     }
 
-    val visible = remember(entries, cwd, trashMode) {
-        if (trashMode) entries.filter { it.trashed }
-        else entries.filter { it.parent == cwd && !it.trashed }
-            .sortedWith(compareBy({ it.kind != "dir" }, { it.name.lowercase() }))
+    val visible = remember(entries, cwd, trashMode, query, searchActive, sortSize, sortDesc) {
+        val q = query.trim().lowercase()
+        if (searchActive && q.isNotEmpty()) {
+            // Whole-drive search — same projected-namespace index as
+            // desktop; results carry their containing folder's name.
+            entries.filter { !it.trashed && it.name.lowercase().contains(q) }
+                .sortedBy { it.name.lowercase() }
+        } else {
+            val scoped = if (trashMode) entries.filter { it.trashed }
+            else entries.filter { it.parent == cwd && !it.trashed }
+            // Folders stay grouped above files; the chosen key sorts
+            // within each group.
+            val byKey: Comparator<NsEntry> = if (sortSize)
+                Comparator { a, b -> if (sortDesc) b.size.compareTo(a.size) else a.size.compareTo(b.size) }
+            else
+                Comparator { a, b -> if (sortDesc) b.name.lowercase().compareTo(a.name.lowercase()) else a.name.lowercase().compareTo(b.name.lowercase()) }
+            scoped.sortedWith(compareBy<NsEntry> { it.kind != "dir" }.then(byKey))
+        }
     }
 
     val activeTransfers = transfers.values.filter { it.state == "Active" || it.state == "Paused" }
@@ -236,6 +256,10 @@ fun BrowserScreen(core: Core, ctx: Context) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("TDrive", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            IconButton(onClick = {
+                searchActive = !searchActive
+                if (!searchActive) query = ""
+            }) { Icon(Icons.Default.Search, "Search") }
             IconButton(onClick = { core.setTrashMode(!trashMode); selected = null }) {
                 Icon(if (trashMode) Icons.Default.Folder else Icons.Default.Delete, if (trashMode) "Files" else "Trash")
             }
@@ -278,12 +302,37 @@ fun BrowserScreen(core: Core, ctx: Context) {
             }
             Spacer(Modifier.width(8.dp))
             Text("${visible.size} items", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box {
+                IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.List, "Sort") }
+                DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                    listOf(
+                        Triple("Name A→Z", false, false),
+                        Triple("Name Z→A", false, true),
+                        Triple("Smallest first", true, false),
+                        Triple("Largest first", true, true),
+                    ).forEach { (label, sz, desc) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = { sortSize = sz; sortDesc = desc; sortMenu = false },
+                        )
+                    }
+                }
+            }
+        }
+        if (searchActive) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("Search whole drive…") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            )
         }
         HorizontalDivider()
 
         // Listing
         LazyColumn(Modifier.weight(1f)) {
-            if (cwd.isNotEmpty() && !trashMode) {
+            if (cwd.isNotEmpty() && !trashMode && !searchActive) {
                 item {
                     ListItem(
                         headlineContent = { Text("..") },
@@ -299,7 +348,13 @@ fun BrowserScreen(core: Core, ctx: Context) {
                 ListItem(
                     headlineContent = { Text(e.name, maxLines = 1) },
                     supportingContent = {
-                        if (e.kind == "file") Text(humanSize(e.size), style = MaterialTheme.typography.bodySmall)
+                        val bits = mutableListOf<String>()
+                        if (e.kind == "file") bits.add(humanSize(e.size))
+                        if (e.encrypted) bits.add("encrypted")
+                        if (searchActive && e.kind != "dir") {
+                            bits.add("in ${entries.find { it.id == e.parent }?.name ?: "root"}")
+                        }
+                        if (bits.isNotEmpty()) Text(bits.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                     },
                     leadingContent = {
                         Icon(if (e.kind == "dir") Icons.Default.Folder else Icons.Default.InsertDriveFile, null)
@@ -352,6 +407,7 @@ fun BrowserScreen(core: Core, ctx: Context) {
                     IconButton(onClick = { core.purge(sel.id); selected = null }) { Icon(Icons.Default.DeleteForever, "Purge") }
                 } else {
                     if (sel.kind == "file") IconButton(onClick = { downloadFor = sel }) { Icon(Icons.Default.Download, "Get") }
+                    IconButton(onClick = { showInfo = sel }) { Icon(Icons.Default.Info, "Properties") }
                     IconButton(onClick = { showRename = sel }) { Icon(Icons.Default.Edit, "Rename") }
                     IconButton(onClick = { showMove = sel }) { Icon(Icons.Default.DriveFileMove, "Move") }
                     IconButton(onClick = { core.delete(sel.id); selected = null }) { Icon(Icons.Default.Delete, "Delete") }
@@ -361,6 +417,9 @@ fun BrowserScreen(core: Core, ctx: Context) {
                 var menu by remember { mutableStateOf(false) }
                 if (!trashMode) {
                     UploadButton(core, ctx)
+                    if (vault.unlocked) {
+                        Icon(Icons.Default.Lock, "uploads encrypted", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                    }
                     TextButton(onClick = { showMkdir = true }) { Text("New folder") }
                     IconButton(onClick = { core.sync() }) { Icon(Icons.Default.Refresh, "Sync") }
                 } else {
@@ -421,6 +480,32 @@ fun BrowserScreen(core: Core, ctx: Context) {
                 }) { Text("Download") }
             },
             dismissButton = { TextButton(onClick = { downloadFor = null }) { Text("Cancel") } },
+        )
+    }
+    showInfo?.let { e ->
+        val rows = mutableListOf<Pair<String, String>>()
+        rows.add("type" to (if (e.kind == "dir") "folder" else if (e.encrypted) "file (encrypted)" else "file"))
+        rows.add("name" to e.name)
+        if (e.kind == "file") {
+            rows.add("size" to "${humanSize(e.size)} (${e.size} B)")
+            rows.add("uploaded" to fmtTs(e.uploadTime))
+            if (e.partCount > 1) rows.add("parts" to "${e.partCount} chunks")
+        }
+        rows.add("location" to (entries.find { it.id == e.parent }?.name ?: "root"))
+        AlertDialog(
+            onDismissRequest = { showInfo = null },
+            title = { Text("Properties") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    rows.forEach { (k, v) ->
+                        Row {
+                            Text(k, Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(v, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showInfo = null }) { Text("Close") } },
         )
     }
     if (showUnlock) InputDialog("Unlock vault", "Password", password = true) { pw ->
@@ -489,6 +574,12 @@ fun InputDialog(title: String, label: String, initial: String = "", password: Bo
         confirmButton = { TextButton(onClick = { onDone(text) }) { Text("OK") } },
         dismissButton = { TextButton(onClick = { onDone("") }) { Text("Cancel") } },
     )
+}
+
+fun fmtTs(t: Long): String {
+    if (t <= 0) return "—"
+    return java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+        .format(java.util.Date(t * 1000))
 }
 
 fun humanSize(n: Long): String {

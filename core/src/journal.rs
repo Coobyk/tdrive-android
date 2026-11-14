@@ -77,6 +77,19 @@ pub struct Journal {
     /// Watched backup directory, if any.
     #[serde(default)]
     pub backup_dir: Option<PathBuf>,
+    /// Folder sync pairs: local dir → remote folder id. New local
+    /// files upload to the paired folder on each tick (top-level
+    /// files only — the same ledger as photo backup).
+    #[serde(default)]
+    pub sync_pairs: Vec<SyncPair>,
+}
+
+/// One local↔remote sync pair in the journal.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SyncPair {
+    pub local: PathBuf,
+    /// Remote folder object id — files land directly inside it.
+    pub remote: String,
 }
 
 impl Journal {

@@ -197,6 +197,8 @@ pub enum Command {
         dir: PathBuf,
     },
     BackupTick,
+    /// Register local↔remote sync pair and upload what's new.
+    AddSyncPair { local: PathBuf, remote: String },
     LiveSync,
     SignOut,
     // Internal task→worker messages — spawned transfers report journal
@@ -326,6 +328,10 @@ pub enum Event {
 /// frozen.
 struct FloodSleep {
     tx: async_channel::Sender<Event>,
+    /// The countdown emitter for the latest wait — a new flood wait
+    /// replaces it so two waiting requests never interleave stale
+    /// seconds in the status line.
+    countdown: std::sync::Mutex<Option<tokio::task::AbortHandle>>,
 }
 
 impl grammers_client::sender::RetryPolicy for FloodSleep {
@@ -337,9 +343,26 @@ impl grammers_client::sender::RetryPolicy for FloodSleep {
         match &ctx.error {
             InvocationError::Rpc(e) if e.code == 420 => {
                 let secs = (e.value.unwrap_or(60) as u64).clamp(1, 86_400);
-                let _ = self.tx.try_send(Event::Status {
-                    message: format!("rate-limited — resuming in {secs}s"),
+                if let Some(h) = self.countdown.lock().unwrap().take() {
+                    h.abort();
+                }
+                let tx = self.tx.clone();
+                let task = tokio::spawn(async move {
+                    for left in (1..=secs).rev() {
+                        let _ = tx
+                            .send(Event::Status {
+                                message: format!("rate-limited — resuming in {left}s"),
+                            })
+                            .await;
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                    let _ = tx
+                        .send(Event::Status {
+                            message: "rate limit lifted — resuming".into(),
+                        })
+                        .await;
                 });
+                *self.countdown.lock().unwrap() = Some(task.abort_handle());
                 std::ops::ControlFlow::Continue(std::time::Duration::from_secs(secs))
             }
             InvocationError::Io(_) if ctx.fail_count.get() < 120 => {
@@ -417,6 +440,9 @@ pub fn spawn() -> Handle {
                 journal: Journal::default(),
                 rx: cmd_rx,
                 tx: ev_tx,
+                pool_runner: None,
+                api_id: 0,
+                reserved_names: std::collections::HashSet::new(),
             };
             worker.journal = Journal::load(&worker.journal_path);
             worker.run().await;
@@ -507,6 +533,13 @@ struct Worker {
     rx: mpsc::UnboundedReceiver<Command>,
     tx: async_channel::Sender<Event>,
     cmd_tx: mpsc::UnboundedSender<Command>,
+    /// Pool runner task — abort on reconnect so two connections never
+    /// share one auth key (Telegram answers AUTH_KEY_DUPLICATED).
+    pool_runner: Option<tokio::task::JoinHandle<()>>,
+    api_id: i32,
+    /// "parent\0name" already claimed this session — same-batch uploads
+    /// would all pass a namespace check before the projection catches up.
+    reserved_names: std::collections::HashSet<String>,
 }
 
 impl Worker {
@@ -614,7 +647,13 @@ impl Worker {
                 )
                 .await
             }
-            Command::BackupTick => self.backup_tick().await,
+            Command::BackupTick => {
+                self.backup_tick().await?;
+                self.sync_tick().await
+            }
+            Command::AddSyncPair { local, remote } => {
+                self.add_sync_pair(local, remote).await
+            }
             Command::LiveSync => self.live_sync().await,
             Command::SignOut => self.sign_out().await,
             Command::OpApplied { header, msg_id } => {

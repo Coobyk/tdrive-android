@@ -19,6 +19,9 @@ data class NsEntry(
     val size: Long,
     val parent: String?,
     val trashed: Boolean,
+    val encrypted: Boolean = false,
+    val uploadTime: Long = 0,
+    val partCount: Int = 1,
 )
 
 data class Transfer(
@@ -244,6 +247,9 @@ class Core private constructor(private val scope: CoroutineScope) {
                 size = o.optLong("size"),
                 parent = o.optString("parent"),
                 trashed = trash?.has(id) == true,
+                encrypted = o.optBoolean("encrypted"),
+                uploadTime = o.optLong("upload_time"),
+                partCount = o.optInt("part_count", 1),
             ))
         }
         return out
