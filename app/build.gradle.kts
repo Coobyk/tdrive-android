@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -16,10 +18,22 @@ android {
         versionName = "0.1"
     }
 
+    signingConfigs {
+        create("release") {
+            val props = Properties().apply {
+                load(rootProject.file("local.properties").inputStream())
+            }
+            storeFile = rootProject.file(props.getProperty("tdrive.storeFile"))
+            storePassword = props.getProperty("tdrive.storePassword")
+            keyAlias = props.getProperty("tdrive.keyAlias")
+            keyPassword = props.getProperty("tdrive.keyPassword")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

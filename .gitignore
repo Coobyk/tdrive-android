@@ -6,3 +6,4 @@ local.properties
 .idea/
 app/src/main/jniLibs/
 core/target/
+tdrive-release.keystore
