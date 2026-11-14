@@ -3,6 +3,7 @@ package dev.tdrive.app
 import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -248,6 +249,20 @@ fun BrowserScreen(core: Core, ctx: Context) {
     }
 
     val activeTransfers = transfers.values.filter { it.state == "Active" || it.state == "Paused" }
+
+    // Back unwinds UI state first, then directory depth, then leaves
+    // the browser for the drive list — never exits mid-drive.
+    BackHandler(enabled = selected != null || searchActive || trashMode || cwd.isNotEmpty()) {
+        when {
+            selected != null -> selected = null
+            searchActive -> { searchActive = false; query = "" }
+            trashMode -> core.setTrashMode(false)
+            else -> core.setCwd(entries.find { it.id == cwd }?.parent ?: "")
+        }
+    }
+    BackHandler(enabled = selected == null && !searchActive && !trashMode && cwd.isEmpty()) {
+        core.listChannels()
+    }
 
     Column(Modifier.fillMaxSize()) {
         // Titlebar — app wordmark left; view/session controls right.
